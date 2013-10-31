@@ -76,7 +76,14 @@ func main() {
 			http.SetCookie(w, cookie)
 			cookie = &http.Cookie{Name: "prot", Value: "https"}
 			http.SetCookie(w, cookie)
-			w.Write([]byte("HTTP/1.0 200 Connection established\r\nProxy-agent: go-http-tunnel\r\n\r\n"))
+			/*
+				b := []byte("HTTP/1.0 200 Connection established\r\nProxy-agent: go-http-tunnel\r\n\r\n")
+				for i, _ := range b {
+					b[i] += 1
+				}
+			*/
+			w.WriteHeader(http.StatusOK)
+
 			return
 		}
 

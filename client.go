@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 )
 
 var (
@@ -40,9 +41,10 @@ func init() {
 	if !strings.HasPrefix(serverUrl, "http://") {
 		serverUrl = "http://" + serverUrl
 	}
-	log.Println(proxyUrl, serverUrl)
 
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
+	log.Println(proxyUrl, serverUrl)
 }
 
 func main() {
@@ -80,17 +82,18 @@ func handleConnection(conn net.Conn) {
 		//log.Println(prot, token, err)
 		return
 	}
-	n, err := conn.Write(resp)
-	if err != nil {
-		log.Println(n, err)
-		return
-	}
-
 	if prot == ProtHttp {
+		n, err := conn.Write(resp)
+		if err != nil {
+			log.Println(n, err)
+		}
 		return
 	}
 
 	if prot == ProtHttps {
+
+		conn.Write([]byte("HTTP/1.0 200 Connection established\r\nProxy-agent: go-http-tunnel\r\n\r\n"))
+
 		statusChan := make(chan int64)
 
 		go transferUp(serverUrl+httpsURI+"?token="+token, conn, proxy, statusChan)
@@ -221,6 +224,7 @@ func transferUp(urlStr string, client io.ReadWriter, proxy io.ReadWriter, status
 			//log.Println(len(buf), err)
 			break
 		}
+		time.Sleep(time.Millisecond * 500)
 	}
 
 	status <- -1
@@ -242,6 +246,7 @@ func transferDown(urlStr string, client io.ReadWriter, proxy io.ReadWriter, stat
 			resp.Body.Close()
 			break
 		}
+		time.Sleep(time.Millisecond * 500)
 		resp.Body.Close()
 	}
 	status <- -2
