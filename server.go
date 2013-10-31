@@ -51,7 +51,13 @@ func main() {
 			return
 		}
 
-		req, err := http.ReadRequest(bufio.NewReader(r.Body))
+		buf, _ := ioutil.ReadAll(r.Body)
+
+		for i, _ := range buf {
+			buf[i] -= 1
+		}
+
+		req, err := http.ReadRequest(bufio.NewReader(bytes.NewBuffer(buf)))
 		if err != nil {
 			log.Println(err)
 			w.WriteHeader(http.StatusBadRequest)
