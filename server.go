@@ -51,13 +51,7 @@ func main() {
 			return
 		}
 
-		buf, _ := ioutil.ReadAll(r.Body)
-
-		for i, _ := range buf {
-			buf[i] -= 1
-		}
-
-		req, err := http.ReadRequest(bufio.NewReader(bytes.NewBuffer(buf)))
+		req, err := http.ReadRequest(bufio.NewReader(r.Body))
 		if err != nil {
 			log.Println(err)
 			w.WriteHeader(http.StatusBadRequest)
@@ -80,15 +74,9 @@ func main() {
 
 			cookie := &http.Cookie{Name: "token", Value: token}
 			http.SetCookie(w, cookie)
-			cookie = &http.Cookie{Name: "prot", Value: "abc"}
+			cookie = &http.Cookie{Name: "prot", Value: "https"}
 			http.SetCookie(w, cookie)
-			/*
-				b := []byte("HTTP/1.0 200 Connection established\r\nProxy-agent: go-http-tunnel\r\n\r\n")
-				for i, _ := range b {
-					b[i] += 1
-				}
-			*/
-			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("HTTP/1.0 200 Connection established\r\nProxy-agent: go-http-tunnel\r\n\r\n"))
 
 			return
 		}
@@ -143,10 +131,6 @@ func main() {
 			delete(conns, token)
 			s.Conn.Close()
 			return
-		}
-
-		for i, _ := range buf {
-			buf[i] += 1
 		}
 
 		w.Write(buf)

@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"time"
 )
 
 var (
@@ -69,8 +68,6 @@ func handleConnection(conn net.Conn) {
 	proxy, err := connectProxy(proxyUrl)
 	if err != nil {
 		log.Println(err)
-		resp := makeResponse(http.StatusBadGateway)
-		resp.Write(conn)
 		return
 	}
 	if proxy != nil {
@@ -82,18 +79,18 @@ func handleConnection(conn net.Conn) {
 		//log.Println(prot, token, err)
 		return
 	}
+
+	n, err := conn.Write(resp)
+	if err != nil {
+		log.Println(n, err)
+		return
+	}
+
 	if prot == ProtHttp {
-		n, err := conn.Write(resp)
-		if err != nil {
-			log.Println(n, err)
-		}
 		return
 	}
 
 	if prot == ProtHttps {
-
-		conn.Write([]byte("HTTP/1.0 200 Connection established\r\nProxy-agent: go-http-tunnel\r\n\r\n"))
-
 		statusChan := make(chan int64)
 
 		go transferUp(serverUrl+httpsURI+"?token="+token, conn, proxy, statusChan)
@@ -139,7 +136,7 @@ func connect(conn net.Conn, proxy net.Conn) (string, string, []byte, error) {
 		}
 	}
 
-	log.Println("prot:", prot, "token:", token)
+	//log.Println("prot:", prot, "token:", token)
 
 	r, err = ioutil.ReadAll(resp.Body)
 	//log.Println(string(r))
@@ -181,24 +178,6 @@ func parseRequest(data []byte) (*http.Request, error) {
 	return http.ReadRequest(bufio.NewReader(bytes.NewBuffer(data)))
 }
 
-/*
-func getToken(proxy net.Conn) (string, error) {
-	resp, err := request("POST", serverUrl+pollURI, nil, proxy)
-	if err != nil {
-		log.Println(err)
-		return "", err
-	}
-
-	body, err := read(resp.Body)
-	if err != nil {
-		log.Println(err)
-		return "", err
-	}
-
-	return string(body), nil
-}
-*/
-
 func transferUp(urlStr string, client io.ReadWriter, proxy io.ReadWriter, status chan<- int64) {
 	for {
 		buf, err := read(client)
@@ -224,7 +203,6 @@ func transferUp(urlStr string, client io.ReadWriter, proxy io.ReadWriter, status
 			//log.Println(len(buf), err)
 			break
 		}
-		time.Sleep(time.Millisecond * 500)
 	}
 
 	status <- -1
@@ -240,111 +218,17 @@ func transferDown(urlStr string, client io.ReadWriter, proxy io.ReadWriter, stat
 		if resp.StatusCode != http.StatusOK {
 			break
 		}
+
 		n, err := io.Copy(client, resp.Body)
 		if err != nil {
 			log.Println(n, err)
 			resp.Body.Close()
 			break
 		}
-		time.Sleep(time.Millisecond * 500)
 		resp.Body.Close()
 	}
+
 	status <- -2
-}
-
-/*
-func transferDown(r io.Reader, w io.Writer, status chan<- int64) {
-	for {
-		buf, err := read(r)
-		if len(buf) > 0 {
-			resp, err := http.ReadResponse(bufio.NewReader(bytes.NewBuffer(buf)), nil)
-			if err != nil {
-				log.Println(err)
-				break
-			}
-			n, err := io.Copy(w, resp.Body)
-			resp.Body.Close()
-			if err != nil {
-				log.Println(n, err)
-				break
-			}
-		}
-		if err != nil {
-			log.Println(len(buf), err)
-			break
-		}
-	}
-	status <- -2
-}
-*/
-func readFromClient(r io.Reader, ch chan<- []byte, statusChan chan<- int64) {
-	for {
-		buf := make([]byte, BufferSize)
-		n, err := r.Read(buf)
-		//log.Println("Read from client", n)
-		if n > 0 {
-			ch <- buf[:n]
-		}
-		if err != nil {
-			//log.Println(err)
-			break
-		}
-	}
-	close(ch)
-	statusChan <- -1
-	//log.Println("readFromClient exit")
-}
-
-func write2Client(w io.Writer, ch <-chan []byte, statusChan chan<- int64) {
-	for buf := range ch {
-		//log.Println(string(buf))
-		n, err := w.Write(buf)
-		if err != nil {
-			log.Println(n, err)
-			continue
-		}
-	}
-	statusChan <- -3
-	//log.Println("write2Client exit")
-}
-
-/*
-func sendReadBack(reqChan <-chan []byte, respChan chan<- []byte, statusChan chan<- int64, proxy io.ReadWriter) {
-	for buf := range reqChan {
-		//log.Println(string(buf))
-		resp, err := request("POST", serverUrl+httpURI, bytes.NewBuffer(buf), proxy)
-		if err != nil {
-			log.Println(resp, err)
-			continue
-		}
-
-		rbuf, err := ioutil.ReadAll(resp.Body)
-		resp.Body.Close()
-
-		if len(rbuf) > 0 {
-			respChan <- rbuf
-			//log.Println(string(rbuf))
-			statusChan <- int64(len(rbuf))
-		}
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-	}
-	close(respChan)
-	statusChan <- -2
-	//log.Println("sendReadBack exit")
-}
-*/
-func makeResponse(code int) *http.Response {
-	resp := new(http.Response)
-	resp.StatusCode = code
-	resp.Status = http.StatusText(code)
-	resp.Proto = "HTTP/1.0"
-	resp.ProtoMajor = 1
-	resp.ProtoMinor = 0
-
-	return resp
 }
 
 func connectProxy(proxy string) (net.Conn, error) {
@@ -362,6 +246,8 @@ func request(method string, urlStr string, body io.Reader, proxy io.ReadWriter) 
 	}
 
 	if proxy != nil {
+		proxy, _ = connectProxy(proxyUrl)
+
 		if err := req.WriteProxy(proxy); err != nil {
 			log.Println(err)
 			return nil, err
