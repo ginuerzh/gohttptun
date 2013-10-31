@@ -80,7 +80,7 @@ func main() {
 
 			cookie := &http.Cookie{Name: "token", Value: token}
 			http.SetCookie(w, cookie)
-			cookie = &http.Cookie{Name: "prot", Value: "https"}
+			cookie = &http.Cookie{Name: "prot", Value: "abc"}
 			http.SetCookie(w, cookie)
 			/*
 				b := []byte("HTTP/1.0 200 Connection established\r\nProxy-agent: go-http-tunnel\r\n\r\n")
