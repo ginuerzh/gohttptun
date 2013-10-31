@@ -145,6 +145,10 @@ func main() {
 			return
 		}
 
+		for i, _ := range buf {
+			buf[i] += 1
+		}
+
 		w.Write(buf)
 	})
 
