@@ -38,7 +38,7 @@ func init() {
 	flag.StringVar(&proxyUrl, "P", "", "http proxy for forward")
 	flag.StringVar(&serverUrl, "S", "localhost:8000", "the server that client connecting to")
 	flag.StringVar(&listenAddr, "L", ":8888", "listen address")
-	flag.IntVar(&bufferSize, "b", 1460, "buffer size")
+	flag.IntVar(&bufferSize, "b", 8192, "buffer size")
 	flag.Parse()
 
 	if !strings.HasPrefix(serverUrl, "http://") {
@@ -86,7 +86,7 @@ func handleConnection(conn net.Conn) {
 	}
 
 	if prot == ProtHttps {
-		log.Println("https:", token)
+		//log.Println("https:", token)
 
 		pushChan := make(chan []byte)
 		pollChan := make(chan []byte)
@@ -152,7 +152,7 @@ func readAll(r io.Reader, ch chan<- []byte, exit <-chan int) {
 				ch <- buf
 			}
 			if err != nil {
-				log.Println(len(buf), err)
+				//log.Println(len(buf), err)
 				return
 			}
 		case <-exit:
@@ -182,7 +182,7 @@ func parseRequest(data []byte) (*http.Request, error) {
 }
 
 func transfer(token string, in <-chan []byte, out chan<- []byte, exit chan<- int) {
-	defer log.Println(token, "connection closed")
+	//defer log.Println(token, "connection closed")
 	defer close(out)
 
 	for {
@@ -192,7 +192,7 @@ func transfer(token string, in <-chan []byte, out chan<- []byte, exit chan<- int
 			if !ok {
 				return
 			}
-			log.Println(token, "push", len(b))
+			//log.Println(token, "push", len(b))
 			resp, err := requestData("POST", serverUrl+httpsURI+"?token="+token, bytes.NewBuffer(b))
 			if err != nil {
 				log.Println(err)
@@ -201,7 +201,7 @@ func transfer(token string, in <-chan []byte, out chan<- []byte, exit chan<- int
 			}
 			if len(resp) > 0 {
 				out <- resp
-				log.Println(token, "poll", len(resp))
+				//log.Println(token, "poll", len(resp))
 			}
 			break
 		case <-timeout:
@@ -213,7 +213,7 @@ func transfer(token string, in <-chan []byte, out chan<- []byte, exit chan<- int
 			}
 			if len(resp) > 0 {
 				out <- resp
-				log.Println(token, "poll", len(resp), "timeout")
+				//log.Println(token, "poll", len(resp), "timeout")
 			}
 			break
 		}
