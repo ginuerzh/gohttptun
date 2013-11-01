@@ -16,41 +16,68 @@ import (
 )
 
 type Connection struct {
-	Host string
-	Conn net.Conn
+	Host   string
+	Conn   net.Conn
+	Output <-chan []byte
 }
 
-const (
-	BufferSize = 1460
-)
+func NewConnection(conn net.Conn, host string) *Connection {
+	c := new(Connection)
+	c.Host = host
+	c.Conn = conn
+	ch := make(chan []byte)
+	c.Output = ch
+	go func(ch chan<- []byte) {
+		defer close(ch)
+		defer c.Conn.Close()
+		for {
+			buf, err := read(c.Conn)
+			if len(buf) > 0 {
+				ch <- buf
+			}
+			if len(buf) == 0 {
+				log.Println("read 0 data")
+			}
+			if err != nil {
+				log.Println(err)
+				break
+			}
+		}
+	}(ch)
+
+	return c
+}
 
 var (
 	proxyUrl   string
 	listenAddr string
 	conns      = make(map[string]*Connection)
+	bufferSize int
 )
 
 func init() {
 	flag.StringVar(&proxyUrl, "P", "", "http proxy for forward")
 	flag.StringVar(&listenAddr, "L", ":8000", "listen address")
+	flag.IntVar(&bufferSize, "b", 4096, "buffer size")
 	flag.Parse()
 
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	log.Println("proxy:", proxyUrl)
+	log.Println(proxyUrl, listenAddr, bufferSize)
 }
 
 func main() {
 	http.HandleFunc("/connect", func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
-
-		proxy, err := connectProxy(proxyUrl)
-		if err != nil {
-			log.Println(err)
-			w.WriteHeader(http.StatusBadGateway)
-			return
-		}
-
+		/*
+			body, err := ioutil.ReadAll(r.Body)
+			if err != nil {
+				log.Println(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			log.Println(string(body))
+		*/
 		req, err := http.ReadRequest(bufio.NewReader(r.Body))
 		if err != nil {
 			log.Println(err)
@@ -59,7 +86,7 @@ func main() {
 		}
 
 		if req.Method == "CONNECT" {
-			log.Println("https:", req.URL.Host)
+			//log.Println("https:", req.URL.Host)
 			s, err := net.Dial("tcp", req.URL.Host)
 			if err != nil {
 				log.Println(err)
@@ -70,7 +97,7 @@ func main() {
 			rn := rand.New(rand.NewSource(time.Now().UnixNano()))
 			token := strconv.FormatInt(rn.Int63(), 10)
 
-			conns[token] = &Connection{Host: req.URL.Host, Conn: s}
+			conns[token] = NewConnection(s, req.URL.Host)
 
 			cookie := &http.Cookie{Name: "token", Value: token}
 			http.SetCookie(w, cookie)
@@ -81,18 +108,20 @@ func main() {
 			return
 		}
 
-		resp, err := request(req, proxy)
+		resp, err := request(req)
+		if resp != nil {
+			defer resp.Body.Close()
+		}
 		if err != nil {
 			log.Println(err)
-			w.WriteHeader(http.StatusServiceUnavailable)
+			w.WriteHeader(http.StatusRequestTimeout)
 			return
 		}
-		defer resp.Body.Close()
-		io.Copy(w, resp.Body)
+
+		resp.Write(w)
 	})
 
 	http.HandleFunc("/https", func(w http.ResponseWriter, r *http.Request) {
-		//log.Println(r.RequestURI, r.URL, r.FormValue("token"))
 		defer r.Body.Close()
 
 		token := r.FormValue("token")
@@ -102,41 +131,40 @@ func main() {
 			return
 		}
 
-		n, err := io.Copy(s.Conn, r.Body)
-		if err != nil {
-			log.Println(n, err)
-			w.WriteHeader(http.StatusServiceUnavailable)
-			delete(conns, token)
-			s.Conn.Close()
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-	})
-
-	http.HandleFunc("/poll", func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
-
-		token := r.FormValue("token")
-		s, ok := conns[token]
-		if !ok {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-
-		buf, err := read(s.Conn)
+		buf, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			log.Println(err)
-			w.WriteHeader(http.StatusServiceUnavailable)
-			delete(conns, token)
-			s.Conn.Close()
-			return
+		}
+		if len(buf) > 0 {
+			if n, err := s.Conn.Write(buf); err != nil {
+				log.Println(n, err)
+				w.WriteHeader(http.StatusRequestTimeout)
+				delete(conns, token)
+				s.Conn.Close()
+				return
+			}
 		}
 
-		w.Write(buf)
+		timeout := time.After(time.Millisecond * 1000)
+		select {
+		case b, ok := <-s.Output:
+			if !ok {
+				log.Println(token, len(b), "connection closed")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				break
+			}
+			n, err := w.Write(b)
+			if err != nil {
+				log.Println(n, err)
+			}
+			log.Println("send data", n)
+			break
+		case <-timeout:
+			log.Println(token, "timeout, no data to send")
+			w.WriteHeader(http.StatusOK)
+		}
 	})
 
-	log.Println("listen on", listenAddr)
 	log.Fatal(http.ListenAndServe(listenAddr, nil))
 }
 
@@ -149,25 +177,77 @@ func connectProxy(proxy string) (net.Conn, error) {
 }
 
 func read(r io.Reader) ([]byte, error) {
-	buf := make([]byte, BufferSize)
+	buf := make([]byte, bufferSize)
 	n, err := r.Read(buf)
+	//log.Println("read data", n)
 	return buf[:n], err
 }
 
-func request(req *http.Request, proxy net.Conn) (*http.Response, error) {
+func readAll(r io.Reader) ([]byte, error) {
+	var rbuf [4096]byte
+	buf := new(bytes.Buffer)
+	for {
+		n, err := r.Read(rbuf[:])
+		if n > 0 {
+			buf.Write(rbuf[:n])
+		}
+		log.Println(n, err)
+		if err != nil {
+			log.Println(err)
+			return buf.Bytes(), err
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+/*
+func requestData(req *http.Request) (<-chan []byte, error) {
+	proxy, err := connectProxy(proxyUrl)
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
 	if proxy != nil {
+		defer proxy.Close()
+
 		if err := req.WriteProxy(proxy); err != nil {
 			log.Println(err)
 			return nil, err
 		}
-		r, err := ioutil.ReadAll(proxy)
-		if err != nil {
+		reader := bufio.NewReader(proxy)
+		for {
+			line, err := reader.ReadString("\r\n")
+			if err != nil {
+				log.Println(err)
+				return nil, err
+			}
+			log.Println(line)
+			if len(line) == 0 {
+				break
+			}
+		}
+
+	}
+}
+*/
+func request(req *http.Request) (*http.Response, error) {
+	proxy, err := connectProxy(proxyUrl)
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+
+	if proxy != nil {
+		defer proxy.Close()
+
+		if err := req.WriteProxy(proxy); err != nil {
 			log.Println(err)
 			return nil, err
 		}
-		return http.ReadResponse(bufio.NewReader(bytes.NewBuffer(r)), req)
+
+		return http.ReadResponse(bufio.NewReader(proxy), req)
 	}
 
-	client := new(http.Client)
-	return client.Do(req)
+	req.RequestURI = ""
+	return http.DefaultClient.Do(req)
 }
