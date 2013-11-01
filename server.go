@@ -149,7 +149,7 @@ func main() {
 		select {
 		case b, ok := <-s.Output:
 			if !ok {
-				log.Println(token, len(b), "connection closed")
+				//log.Println(token, len(b), "connection closed")
 				w.WriteHeader(http.StatusServiceUnavailable)
 				break
 			}
@@ -160,7 +160,7 @@ func main() {
 			log.Println("send data", n)
 			break
 		case <-timeout:
-			log.Println(token, "timeout, no data to send")
+			//log.Println(token, "timeout, no data to send")
 			w.WriteHeader(http.StatusOK)
 		}
 	})
@@ -191,7 +191,7 @@ func readAll(r io.Reader) ([]byte, error) {
 		if n > 0 {
 			buf.Write(rbuf[:n])
 		}
-		log.Println(n, err)
+		//log.Println(n, err)
 		if err != nil {
 			log.Println(err)
 			return buf.Bytes(), err
