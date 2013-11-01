@@ -58,7 +58,7 @@ var (
 func init() {
 	flag.StringVar(&proxyUrl, "P", "", "http proxy for forward")
 	flag.StringVar(&listenAddr, "L", ":8000", "listen address")
-	flag.IntVar(&bufferSize, "b", 4096, "buffer size")
+	flag.IntVar(&bufferSize, "b", 8192, "buffer size")
 	flag.Parse()
 
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -145,7 +145,7 @@ func main() {
 			}
 		}
 
-		timeout := time.After(time.Millisecond * 200)
+		timeout := time.After(time.Millisecond * 100)
 		select {
 		case b, ok := <-s.Output:
 			if !ok {
