@@ -145,7 +145,7 @@ func main() {
 			}
 		}
 
-		timeout := time.After(time.Millisecond * 1000)
+		timeout := time.After(time.Millisecond * 200)
 		select {
 		case b, ok := <-s.Output:
 			if !ok {

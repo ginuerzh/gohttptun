@@ -186,7 +186,7 @@ func transfer(token string, in <-chan []byte, out chan<- []byte, exit chan<- int
 	defer close(out)
 
 	for {
-		timeout := time.After(time.Millisecond * 1000)
+		timeout := time.After(time.Millisecond * 100)
 		select {
 		case b, ok := <-in:
 			if !ok {
