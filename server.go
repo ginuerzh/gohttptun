@@ -58,7 +58,7 @@ var (
 func init() {
 	flag.StringVar(&proxyUrl, "P", "", "http proxy for forward")
 	flag.StringVar(&listenAddr, "L", ":8000", "listen address")
-	flag.IntVar(&bufferSize, "b", 32768, "buffer size")
+	flag.IntVar(&bufferSize, "b", 65535, "buffer size")
 	flag.Parse()
 
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
