@@ -5,52 +5,16 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
-	"flag"
 	"io"
 	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
-	"strings"
 	"time"
 )
 
-var (
-	proxyUrl   string
-	serverUrl  string
-	listenAddr string
-	bufferSize int
-)
-
-const (
-	connectURI = "/connect"
-	httpsURI   = "/https"
-	httpURI    = "/http"
-	pollURI    = "/poll"
-
-	ProtHttp  = "http"
-	ProtHttps = "https"
-
-	ExitFlag = 1
-)
-
-func init() {
-	flag.StringVar(&proxyUrl, "P", "", "http proxy for forward")
-	flag.StringVar(&serverUrl, "S", "localhost:8000", "the server that client connecting to")
-	flag.StringVar(&listenAddr, "L", ":8888", "listen address")
-	flag.IntVar(&bufferSize, "b", 8192, "buffer size")
-	flag.Parse()
-
-	if !strings.HasPrefix(serverUrl, "http://") {
-		serverUrl = "http://" + serverUrl
-	}
-
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
-
-	log.Println(proxyUrl, serverUrl, listenAddr, bufferSize)
-}
-
-func main() {
+func goClient() {
+	log.Println("client connect to", serverUrl, "listen on:", listenAddr, "proxy:", proxyUrl, "buffer size:", bufferSize)
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		log.Fatal(err)
@@ -90,12 +54,11 @@ func handleConnection(conn net.Conn) {
 
 		pushChan := make(chan []byte)
 		pollChan := make(chan []byte)
-		exitChan := make(chan int)
 
-		go readAll(conn, pushChan, exitChan)
+		go readAll(conn, pushChan)
 		go writeAll(conn, pollChan)
 
-		transfer(token, pushChan, pollChan, exitChan)
+		transfer(token, pushChan, pollChan)
 
 		return
 	}
@@ -109,7 +72,7 @@ func connect(r io.Reader) (string, string, []byte, error) {
 		//log.Println(err)
 		return "", "", nil, err
 	}
-	//log.Println(string(r))
+	//log.Println(string(data))
 	resp, err := request("POST", serverUrl+connectURI, bytes.NewBuffer(data))
 	if resp != nil {
 		defer resp.Body.Close()
@@ -135,27 +98,21 @@ func connect(r io.Reader) (string, string, []byte, error) {
 	//log.Println("prot:", prot, "token:", token)
 
 	data, err = ioutil.ReadAll(resp.Body)
-	//log.Println(err)
+	//log.Println(string(data))
 
 	return prot, token, data, err
 }
 
-func readAll(r io.Reader, ch chan<- []byte, exit <-chan int) {
+func readAll(r io.Reader, ch chan<- []byte) {
 	defer close(ch)
-	ticker := time.NewTicker(time.Millisecond * 100)
 
 	for {
-		select {
-		case <-ticker.C:
-			buf, err := read(r)
-			if len(buf) > 0 {
-				ch <- buf
-			}
-			if err != nil {
-				//log.Println(len(buf), err)
-				return
-			}
-		case <-exit:
+		buf, err := read(r)
+		if len(buf) > 0 {
+			ch <- buf
+		}
+		if err != nil {
+			//log.Println(len(buf), err)
 			return
 		}
 	}
@@ -163,30 +120,20 @@ func readAll(r io.Reader, ch chan<- []byte, exit <-chan int) {
 
 func writeAll(w io.Writer, ch <-chan []byte) {
 	for buf := range ch {
-		n, err := w.Write(buf)
+		_, err := w.Write(buf)
 		if err != nil {
-			log.Println(n, err)
+			//log.Println(n, err)
 			break
 		}
 	}
 }
 
-func read(r io.Reader) ([]byte, error) {
-	buf := make([]byte, bufferSize)
-	n, err := r.Read(buf)
-	return buf[:n], err
-}
-
-func parseRequest(data []byte) (*http.Request, error) {
-	return http.ReadRequest(bufio.NewReader(bytes.NewBuffer(data)))
-}
-
-func transfer(token string, in <-chan []byte, out chan<- []byte, exit chan<- int) {
+func transfer(token string, in <-chan []byte, out chan<- []byte) {
 	//defer log.Println(token, "connection closed")
 	defer close(out)
 
 	for {
-		timeout := time.After(time.Millisecond * 100)
+		timeout := time.After(TimeoutIntvl)
 		select {
 		case b, ok := <-in:
 			if !ok {
@@ -195,37 +142,25 @@ func transfer(token string, in <-chan []byte, out chan<- []byte, exit chan<- int
 			//log.Println(token, "push", len(b))
 			resp, err := requestData("POST", serverUrl+httpsURI+"?token="+token, bytes.NewBuffer(b))
 			if err != nil {
-				log.Println(err)
-				//exit <- ExitFlag
+				//log.Println(err)
 				return
 			}
 			if len(resp) > 0 {
 				out <- resp
 				//log.Println(token, "poll", len(resp))
 			}
-			break
 		case <-timeout:
 			resp, err := requestData("POST", serverUrl+httpsURI+"?token="+token, nil)
 			if err != nil {
-				log.Println(token, err)
-				//exit <- ExitFlag
+				//log.Println(token, err)
 				return
 			}
 			if len(resp) > 0 {
 				out <- resp
 				//log.Println(token, "poll", len(resp), "timeout")
 			}
-			break
 		}
 	}
-}
-
-func connectProxy(proxy string) (net.Conn, error) {
-	if len(proxy) > 0 {
-		return net.Dial("tcp", proxy)
-	}
-
-	return nil, nil
 }
 
 func request(method string, urlStr string, body io.Reader) (*http.Response, error) {
@@ -236,7 +171,7 @@ func request(method string, urlStr string, body io.Reader) (*http.Response, erro
 
 	proxy, err := connectProxy(proxyUrl)
 	if err != nil {
-		log.Println(err)
+		//log.Println(err)
 		return nil, err
 	}
 	if proxy != nil {
@@ -266,11 +201,11 @@ func requestData(method string, urlStr string, body io.Reader) ([]byte, error) {
 		defer resp.Body.Close()
 	}
 	if err != nil {
-		log.Println(err)
+		//log.Println(err)
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		log.Println(err, resp.Status)
+		//log.Println(err, resp.Status)
 		return nil, errors.New(resp.Status)
 	}
 
