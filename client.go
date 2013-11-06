@@ -178,7 +178,7 @@ func request(method string, urlStr string, body io.Reader) (*http.Response, erro
 	if proxy != nil {
 		defer proxy.Close()
 
-		req.Header.Add("Proxy-Connection", "Keep-Alive")
+		//req.Header.Add("Proxy-Connection", "Keep-Alive")
 		if err := req.WriteProxy(proxy); err != nil {
 			log.Println(err)
 			return nil, err

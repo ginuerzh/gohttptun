@@ -97,11 +97,7 @@ func goServer() {
 			return
 		}
 
-		buf := new(bytes.Buffer)
-		if err = resp.Write(buf); err != nil {
-			log.Println(err)
-		}
-		w.Write(buf.Bytes())
+		resp.Write(w)
 	})
 
 	http.HandleFunc(httpsURI, func(w http.ResponseWriter, r *http.Request) {
