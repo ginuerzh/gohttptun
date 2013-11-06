@@ -175,5 +175,6 @@ func doRequest(req *http.Request) (*http.Response, error) {
 		return http.ReadResponse(bufio.NewReader(bytes.NewBuffer(r)), req)
 	}
 
+	req.RequestURI = ""
 	return http.DefaultClient.Do(req)
 }
