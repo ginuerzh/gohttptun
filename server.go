@@ -3,6 +3,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"io/ioutil"
 	"log"
 	"math/rand"
@@ -87,6 +88,7 @@ func goServer() {
 
 		resp, err := doRequest(req)
 		if resp != nil {
+			//log.Println(err)
 			defer resp.Body.Close()
 		}
 		if err != nil {
@@ -95,7 +97,11 @@ func goServer() {
 			return
 		}
 
-		resp.Write(w)
+		buf := new(bytes.Buffer)
+		if err = resp.Write(buf); err != nil {
+			log.Println(err)
+		}
+		w.Write(buf.Bytes())
 	})
 
 	http.HandleFunc(httpsURI, func(w http.ResponseWriter, r *http.Request) {
@@ -161,10 +167,13 @@ func doRequest(req *http.Request) (*http.Response, error) {
 			log.Println(err)
 			return nil, err
 		}
-
-		return http.ReadResponse(bufio.NewReader(proxy), req)
+		r, err := ioutil.ReadAll(proxy)
+		if err != nil {
+			log.Println(err)
+			return nil, err
+		}
+		return http.ReadResponse(bufio.NewReader(bytes.NewBuffer(r)), req)
 	}
 
-	req.RequestURI = ""
 	return http.DefaultClient.Do(req)
 }
