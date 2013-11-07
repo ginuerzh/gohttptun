@@ -41,7 +41,7 @@ func NewConnection(conn net.Conn, host string) *Connection {
 			}
 
 			if err != nil {
-				log.Println(err)
+				//log.Println(err)
 				break
 			}
 		}
@@ -171,6 +171,7 @@ func doRequest(req *http.Request) (*http.Response, error) {
 		return http.ReadResponse(bufio.NewReader(bytes.NewBuffer(r)), req)
 	}
 
+	req.Header.Del("Proxy-Connection")
 	req.RequestURI = ""
 	return http.DefaultClient.Do(req)
 }
