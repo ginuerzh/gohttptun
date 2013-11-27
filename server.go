@@ -4,24 +4,62 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"github.com/codegangsta/martini"
+	"github.com/dchest/uniuri"
 	"io/ioutil"
 	"log"
-	"math/rand"
 	"net"
 	"net/http"
-	"strconv"
+	"sync"
 	"time"
 )
 
+type Connection struct {
+	Host      string
+	Conn      net.Conn
+	chanClose chan interface{}
+	Output    <-chan []byte
+	Timeout   time.Duration
+}
+
+type ConnPool struct {
+	sync.RWMutex
+	m map[string]*Connection
+}
+
 var (
-	conns = make(map[string]*Connection)
+	connPool *ConnPool = NewConnPool(poolSize)
 )
 
-type Connection struct {
-	Host    string
-	Conn    net.Conn
-	Output  <-chan []byte
-	Timeout time.Duration
+func NewConnPool(poolSize int) *ConnPool {
+	return &ConnPool{m: make(map[string]*Connection, poolSize)}
+}
+
+func (pool *ConnPool) Get(id string) *Connection {
+	pool.RLock()
+	defer pool.RUnlock()
+
+	return pool.m[id]
+}
+
+func (pool *ConnPool) Add(id string, conn *Connection) {
+	pool.Lock()
+	defer pool.Unlock()
+
+	pool.m[id] = conn
+}
+
+func (pool *ConnPool) Remove(id string) *Connection {
+	pool.Lock()
+	defer pool.Unlock()
+
+	conn := pool.m[id]
+	if conn != nil {
+		conn.chanClose <- 1
+	}
+	delete(pool.m, id)
+
+	return conn
 }
 
 func NewConnection(conn net.Conn, host string) *Connection {
@@ -29,20 +67,29 @@ func NewConnection(conn net.Conn, host string) *Connection {
 	c.Host = host
 	c.Conn = conn
 	c.Timeout = TimeoutMin
-	ch := make(chan []byte)
+	c.chanClose = make(chan interface{}, 1)
+	ch := make(chan []byte, 32)
 	c.Output = ch
 	go func(ch chan<- []byte) {
 		defer close(ch)
 		defer c.Conn.Close()
-		for {
-			buf, err := read(c.Conn)
-			if len(buf) > 0 {
-				ch <- buf
-			}
 
-			if err != nil {
-				//log.Println(err)
-				break
+		ticker := time.NewTicker(1 * time.Millisecond)
+
+		for {
+			select {
+			case <-c.chanClose:
+				return
+			case <-ticker.C:
+				buf, err := read(c.Conn)
+				if len(buf) > 0 {
+					ch <- buf
+				}
+
+				if err != nil {
+					//log.Println(err)
+					return
+				}
 			}
 		}
 	}(ch)
@@ -50,103 +97,113 @@ func NewConnection(conn net.Conn, host string) *Connection {
 	return c
 }
 
+func connectHandler(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	req, err := http.ReadRequest(bufio.NewReader(r.Body))
+	if err != nil {
+		log.Println(err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if req.Method == "CONNECT" {
+		s, err := net.Dial("tcp", req.URL.Host)
+		if err != nil {
+			//log.Println(err)
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		id := uniuri.New()
+		connPool.Add(id, NewConnection(s, req.URL.Host))
+
+		cookie := &http.Cookie{Name: "cid", Value: id}
+		http.SetCookie(w, cookie)
+		w.Write([]byte("HTTP/1.0 200 Connection established\r\nProxy-agent: go-http-tunnel\r\n\r\n"))
+
+		return
+	}
+
+	resp, err := doRequest(req)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
+	if err != nil {
+		log.Println(err)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+
+	resp.Write(w)
+}
+
+func disconnectHandler(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	id := r.FormValue("id")
+
+	connPool.Remove(id)
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func pollHandler(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	id := r.FormValue("id")
+	conn := connPool.Get(id)
+	if conn == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+
+	buf, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		log.Println(err)
+	}
+	if len(buf) > 0 {
+		if n, err := conn.Conn.Write(buf); err != nil {
+			log.Println(n, err)
+			w.WriteHeader(http.StatusNotAcceptable)
+			connPool.Remove(id)
+
+			return
+		}
+	}
+
+	timeout := time.After(conn.Timeout)
+	select {
+	case b, ok := <-conn.Output:
+		if !ok {
+			//log.Println(token, len(b), "connection closed")
+			w.WriteHeader(http.StatusGone)
+			break
+		}
+		n, err := w.Write(b)
+		if err != nil {
+			log.Println(n, err)
+		}
+		conn.Timeout = TimeoutMin // reset timeout
+		//log.Println("send data", n)
+		break
+	case <-timeout:
+		conn.Timeout *= 2 //Extend timeout
+		//log.Println(token, "timeout, no data to send")
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
 func goServer() {
 	log.Println("server listen on", listenAddr, "proxy", proxyUrl, "buffer", bufferSize)
 
-	http.HandleFunc(connectURI, func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
+	m := martini.Classic()
 
-		req, err := http.ReadRequest(bufio.NewReader(r.Body))
-		if err != nil {
-			log.Println(err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
+	m.Post("/connect", connectHandler)
+	m.Post("/poll", pollHandler)
+	m.Post("/disconnect", disconnectHandler)
 
-		if req.Method == "CONNECT" {
-			//log.Println("https:", req.URL.Host)
-			s, err := net.Dial("tcp", req.URL.Host)
-			if err != nil {
-				//log.Println(err)
-				w.WriteHeader(http.StatusServiceUnavailable)
-				return
-			}
-
-			rn := rand.New(rand.NewSource(time.Now().UnixNano()))
-			token := strconv.FormatInt(rn.Int63(), 10)
-
-			conns[token] = NewConnection(s, req.URL.Host)
-
-			cookie := &http.Cookie{Name: "token", Value: token}
-			http.SetCookie(w, cookie)
-			cookie = &http.Cookie{Name: "prot", Value: "https"}
-			http.SetCookie(w, cookie)
-			w.Write([]byte("HTTP/1.0 200 Connection established\r\nProxy-agent: go-http-tunnel\r\n\r\n"))
-
-			return
-		}
-
-		resp, err := doRequest(req)
-		if resp != nil {
-			//log.Println(err)
-			defer resp.Body.Close()
-		}
-		if err != nil {
-			log.Println(err)
-			w.WriteHeader(http.StatusRequestTimeout)
-			return
-		}
-
-		resp.Write(w)
-	})
-
-	http.HandleFunc(httpsURI, func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
-
-		token := r.FormValue("token")
-		s, ok := conns[token]
-		if !ok {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-
-		buf, err := ioutil.ReadAll(r.Body)
-		if err != nil {
-			log.Println(err)
-		}
-		if len(buf) > 0 {
-			if n, err := s.Conn.Write(buf); err != nil {
-				log.Println(n, err)
-				w.WriteHeader(http.StatusRequestTimeout)
-				delete(conns, token)
-				s.Conn.Close()
-				return
-			}
-		}
-
-		timeout := time.After(s.Timeout)
-		select {
-		case b, ok := <-s.Output:
-			if !ok {
-				//log.Println(token, len(b), "connection closed")
-				w.WriteHeader(http.StatusServiceUnavailable)
-				break
-			}
-			n, err := w.Write(b)
-			if err != nil {
-				log.Println(n, err)
-			}
-			s.Timeout = TimeoutMin // reset timeout
-			//log.Println("send data", n)
-			break
-		case <-timeout:
-			s.Timeout *= 2 //Extend timeout
-			//log.Println(token, "timeout, no data to send")
-			w.WriteHeader(http.StatusOK)
-		}
-	})
-
-	log.Fatal(http.ListenAndServe(listenAddr, nil))
+	http.ListenAndServe(listenAddr, m)
 }
 
 func doRequest(req *http.Request) (*http.Response, error) {
@@ -163,6 +220,7 @@ func doRequest(req *http.Request) (*http.Response, error) {
 			log.Println(err)
 			return nil, err
 		}
+
 		r, err := ioutil.ReadAll(proxy)
 		if err != nil {
 			log.Println(err)

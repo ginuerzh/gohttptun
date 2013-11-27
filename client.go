@@ -33,75 +33,62 @@ func goClient() {
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 
-	prot, token, resp, err := connect(conn)
-	if err != nil {
-		//log.Println(prot, token, err)
-		return
-	}
-
-	n, err := conn.Write(resp)
-	if err != nil {
-		log.Println(n, err)
-		return
-	}
-
-	if prot == ProtHttp {
-		//log.Println(string(resp))
-		return
-	}
-
-	if prot == ProtHttps {
-		//log.Println("https:", token)
-
-		pushChan := make(chan []byte)
-		pollChan := make(chan []byte)
-
-		go readAll(conn, pushChan)
-		go writeAll(conn, pollChan)
-
-		transfer(token, pushChan, pollChan)
-
-		return
-	}
-}
-
-func connect(r io.Reader) (string, string, []byte, error) {
-	token := ""
-	prot := "http"
-	data, err := read(r)
+	data, err := read(conn)
 	if err != nil {
 		//log.Println(err)
-		return "", "", nil, err
+		return
 	}
-	//log.Println(string(data))
-	resp, err := request("POST", serverUrl+connectURI, bytes.NewBuffer(data))
-	if resp != nil {
-		defer resp.Body.Close()
-	}
+
+	resp, err := request("POST", serverUrl+connectUri, bytes.NewBuffer(data))
 	if err != nil {
 		log.Println(err)
-		return "", "", nil, err
+		return
+	}
+	defer resp.Body.Close()
+
+	/*
+		data, err = ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		n, err := conn.Write(data)
+		if err != nil {
+			log.Println(n, err)
+		}
+	*/
+
+	_, err = io.Copy(conn, resp.Body)
+	if err != nil {
+		//log.Println(n, err)
+		return
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return "", "", nil, errors.New(resp.Status)
+	id := connId(resp)
+
+	if id == "" {
+		return
 	}
+
+	pushChan := make(chan []byte, 32)
+	pollChan := make(chan []byte, 32)
+
+	go readAll(conn, pushChan)
+	go writeAll(conn, pollChan)
+
+	transfer(id, pushChan, pollChan)
+}
+
+func connId(resp *http.Response) string {
+	id := ""
 
 	for _, cookie := range resp.Cookies() {
-		if cookie.Name == "token" {
-			token = cookie.Value
-		}
-		if cookie.Name == "prot" {
-			prot = cookie.Value
+		if cookie.Name == "cid" {
+			id = cookie.Value
 		}
 	}
-
-	//log.Println("prot:", prot, "token:", token)
-
-	data, err = ioutil.ReadAll(resp.Body)
-	//log.Println(string(data))
-
-	return prot, token, data, err
+	return id
 }
 
 func readAll(r io.Reader, ch chan<- []byte) {
@@ -121,15 +108,15 @@ func readAll(r io.Reader, ch chan<- []byte) {
 
 func writeAll(w io.Writer, ch <-chan []byte) {
 	for buf := range ch {
-		_, err := w.Write(buf)
+		n, err := w.Write(buf)
 		if err != nil {
-			//log.Println(n, err)
+			log.Println(n, err)
 			break
 		}
 	}
 }
 
-func transfer(token string, in <-chan []byte, out chan<- []byte) {
+func transfer(id string, in <-chan []byte, out chan<- []byte) {
 	//defer log.Println(token, "connection closed")
 	defer close(out)
 
@@ -138,10 +125,12 @@ func transfer(token string, in <-chan []byte, out chan<- []byte) {
 		select {
 		case b, ok := <-in:
 			if !ok {
+				request("POST", serverUrl+disconnectUri+"?id="+id, nil)
 				return
 			}
+
 			//log.Println(token, "push", len(b))
-			resp, err := requestData("POST", serverUrl+httpsURI+"?token="+token, bytes.NewBuffer(b))
+			resp, err := requestData("POST", serverUrl+pollUri+"?id="+id, bytes.NewBuffer(b))
 			if err != nil {
 				//log.Println(err)
 				return
@@ -151,7 +140,7 @@ func transfer(token string, in <-chan []byte, out chan<- []byte) {
 				//log.Println(token, "poll", len(resp))
 			}
 		case <-timeout:
-			resp, err := requestData("POST", serverUrl+httpsURI+"?token="+token, nil)
+			resp, err := requestData("POST", serverUrl+pollUri+"?id="+id, nil)
 			if err != nil {
 				//log.Println(token, err)
 				return

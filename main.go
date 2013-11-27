@@ -16,18 +16,20 @@ var (
 	listenAddr string
 	bufferSize int
 	isClient   bool
+	poolSize   int = 32
 
 	TimeoutIntvl = TimeoutMin
 )
 
 const (
-	connectURI = "/connect"
-	httpsURI   = "/https"
+	connectUri    = "/connect"
+	disconnectUri = "/disconnect"
+	pollUri       = "/poll"
 
-	ProtHttp  = "http"
-	ProtHttps = "https"
+	connClosed    = "closed"
+	connKeepAlive = "alive"
 
-	TimeoutMin = time.Millisecond * 100 // 100ms
+	TimeoutMin = time.Millisecond * 10
 )
 
 func init() {
