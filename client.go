@@ -41,7 +41,7 @@ func handleConnection(conn net.Conn) {
 
 	resp, err := request("POST", serverUrl+connectUri, bytes.NewBuffer(data))
 	if err != nil {
-		log.Println(err)
+		//log.Println(err)
 		return
 	}
 	defer resp.Body.Close()
@@ -155,6 +155,11 @@ func transfer(id string, in <-chan []byte, out chan<- []byte) {
 
 func request(method string, urlStr string, body io.Reader) (*http.Response, error) {
 	req, err := http.NewRequest(method, urlStr, body)
+
+	if authUser != "" || authPass != "" {
+		req.SetBasicAuth(authUser, authPass)
+	}
+
 	if err != nil {
 		return nil, err
 	}

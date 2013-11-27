@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"github.com/codegangsta/martini"
+	"github.com/codegangsta/martini-contrib/auth"
 	"github.com/dchest/uniuri"
 	"io/ioutil"
 	"log"
@@ -198,6 +199,16 @@ func goServer() {
 	log.Println("server listen on", listenAddr, "proxy", proxyUrl, "buffer", bufferSize)
 
 	m := martini.Classic()
+
+	if serverAuth {
+		if authUser == "" {
+			authUser = "admin"
+		}
+		if authPass == "" {
+			authPass = "admin"
+		}
+		m.Use(auth.Basic(authUser, authPass))
+	}
 
 	m.Post("/connect", connectHandler)
 	m.Post("/poll", pollHandler)

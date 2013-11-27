@@ -17,6 +17,9 @@ var (
 	bufferSize int
 	isClient   bool
 	poolSize   int = 32
+	serverAuth bool
+	authUser   string
+	authPass   string
 
 	TimeoutIntvl = TimeoutMin
 )
@@ -38,6 +41,9 @@ func init() {
 	flag.StringVar(&listenAddr, "L", ":8888", "listen address")
 	flag.IntVar(&bufferSize, "b", 8192, "buffer size")
 	flag.BoolVar(&isClient, "c", false, "client")
+	flag.BoolVar(&serverAuth, "auth", false, "server need auth")
+	flag.StringVar(&authUser, "user", "", "username for server auth")
+	flag.StringVar(&authPass, "pass", "", "password for server auth")
 	flag.Parse()
 
 	if !strings.HasPrefix(serverUrl, "http://") {
