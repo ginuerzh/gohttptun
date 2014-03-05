@@ -116,7 +116,7 @@ func connectHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		id := uniuri.New()
+		id := uniuri.NewLen(8)
 		connPool.Add(id, NewConnection(s, req.URL.Host))
 
 		cookie := &http.Cookie{Name: "cid", Value: id}
@@ -185,17 +185,18 @@ func pollHandler(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Println(n, err)
 		}
-		conn.Timeout = TimeoutMin // reset timeout
+		//conn.Timeout = TimeoutMin // reset timeout
 		//log.Println("send data", n)
 		break
 	case <-timeout:
-		conn.Timeout *= 2 //Extend timeout
+		//conn.Timeout *= 2 //Extend timeout
 		//log.Println(token, "timeout, no data to send")
 		w.WriteHeader(http.StatusOK)
 	}
 }
 
 func goServer() {
+	bufferSize = 4096
 	log.Println("server listen on", listenAddr, "proxy", proxyUrl, "buffer", bufferSize)
 
 	m := martini.Classic()
